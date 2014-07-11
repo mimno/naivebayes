@@ -1,0 +1,306 @@
+<html>
+<head>
+<script type="text/javascript" src="d3.v3.min.js"></script>
+<script type="text/javascript" src="xregexp-all-min.js"></script>
+<link href='http://fonts.googleapis.com/css?family=Open+Sans|Old+Standard+TT' rel='stylesheet' type='text/css'>
+<style>
+body { font-family: "Open Sans"; }
+line.guide { stroke: #eeeeee; opacity: 0.0; }
+rect { fill: none; pointer-events: all; }
+#modal { visibility: hidden; position: absolute; left: 0px; top: 0px; background: rgba(200,200,200,0.3);
+	 min-height: 100%; width: 100%; text-align: center; z-index: 1000; }
+#docs { width: 80%; background-color: #ffffff; margin: 20 100 100 100; padding: 10;}
+#close { float: right; font-size: x-large; width: 30; height: 30; background-color: #ccc; cursor: pointer;}
+#labels { font-weight: bold; }
+#words { font-size: x-small; margin: 10 60 10 60; }
+.doc { margin: 10 50 10 50; text-align: justify; font-family: "Old Standard TT", Times;}
+</style>
+</head>
+<body>
+	<div id="modal"><div id="docs">
+		<div id="close">&times;</div>
+		<div id="labels"></div>
+    	<div id="words"></div>
+	</div></div>
+	
+	<div id="doc"></div>
+	<div id="word"></div>
+	<div id="log"></div>
+	
+	<div id="confusion"></div>
+<script>
+
+var labels = [];
+
+var labelIDs = d3.map();
+var words = [];
+var wordIDs = d3.map();
+
+var wordLabelCounts = {};
+var wordLabelNonZeros = {};
+var labelSums = {};
+var smoothing = 0.01;
+var logSmoothing = Math.log(smoothing);
+
+var documents = [];
+
+var stopwords = {};
+
+var confusion;
+
+var wordPattern = XRegExp("\\p{L}[\\p{L}\\p{P}]*\\p{L}", "g");
+
+d3.select("#close")
+.on("click", function () { d3.select("#modal").style("visibility", "hidden"); });
+
+function plotConfusion() {
+	var left = 50;
+	var right = 600;
+	var top = 50;
+	var bottom = 600;
+
+	var w = 800,
+	    h = 800;
+
+	var vis = d3.select("#confusion")
+	.append("svg:svg")
+	.attr("width", w)
+	.attr("height", h);
+
+	var maxCell = d3.max(confusion, function( row ) { return d3.max(row); });
+
+	var labelScale = d3.scale.ordinal().domain(d3.range(labels.length)).rangePoints([left, right]);
+	var radiusScale = d3.scale.sqrt().domain([0, maxCell]).range([0, 2 * right / labels.length]);
+	
+	labels.forEach(function (label, labelID) {
+		vis.append("text")
+			.attr("class", "ver")
+			.attr("x", labelScale(labelID))
+			.attr("y", bottom + 10)
+			.attr("transform", "rotate(90," + labelScale(labelID) + "," + (bottom + 10) + ")")
+			.style("dominant-baseline", "middle")
+			.text(label);
+		vis.append("text")
+			.attr("class", "hor")
+			.attr("x", right + 10)
+			.attr("y", labelScale(labelID))
+			.style("dominant-baseline", "middle")
+			.text(label);
+			
+		vis.append("line")
+			.attr("class", "guide")
+			.attr("id", "vert" + labelID)
+			.attr("x1", labelScale(labelID)).attr("x2", labelScale(labelID))
+			.attr("y1", top - 10).attr("y2", bottom + 10)
+			.style("stroke-width", 10)
+		vis.append("line")
+			.attr("class", "guide")
+			.attr("id", "hor" + labelID)
+			.attr("y1", labelScale(labelID)).attr("y2", labelScale(labelID))
+			.attr("x1", left - 10).attr("x2", right + 10)
+			.style("stroke-width", 10)
+	});
+
+	confusion.forEach(function(cells, row) {
+		cells.forEach(function(count, col) {
+		    vis.append("circle")
+			.attr("cx", function(link) { return labelScale(col); })
+			.attr("cy", function(link) { return labelScale(row); })
+			.attr("r", function (link) { return radiusScale(count); })
+			.style("fill", function () { return row == col ? "#88f" : "#f88"; })
+			.style("opacity", function () { return row == col ? 0.3 : 0.7; });
+		});
+	});
+	
+	vis.append("rect")
+	.attr("width", w)
+	.attr("height", h)
+    .on("mousemove", function () {
+		vis.selectAll("line.guide").style("opacity", 0.0);
+		var mousePoint = d3.mouse(this);
+		if (mousePoint[0] >= left && mousePoint[0] <= right) {
+			var labelID = Math.round((mousePoint[0] - left) * (labels.length - 0.5) / (right - left));
+			d3.select("#vert" + labelID).style("opacity", 1.0);
+		} 
+		if (mousePoint[1] >= top && mousePoint[1] <= bottom) {
+			var labelID = Math.round((mousePoint[1] - top) * (labels.length - 0.5) / (bottom - top));
+			d3.select("#hor" + labelID).style("opacity", 1.0);
+		} 
+	})
+    .on("click", function () {
+		vis.selectAll("line.guide").style("opacity", 0.0);
+		var mousePoint = d3.mouse(this);
+		if (mousePoint[0] >= left && mousePoint[0] <= right && 
+			mousePoint[1] >= top && mousePoint[1] <= bottom) {
+			var maxLabelID = Math.round((mousePoint[0] - left) * (labels.length - 0.5) / (right - left));
+			var labelID = Math.round((mousePoint[1] - top) * (labels.length - 0.5) / (bottom - top));
+			
+			d3.select("#labels").text(labels[labelID] + " classified as " + labels[maxLabelID]);
+			var docDivs = d3.select("#docs").selectAll("div.doc").data(documents.filter(function (doc) { return doc.maxLabelID == maxLabelID && doc.labelID == labelID; }));
+			docDivs.enter().append("div").attr("class", "doc");
+			docDivs.exit().remove();
+			docDivs.text(function (doc) { return doc.originalText; });
+			d3.select("#modal").style("visibility", "visible");
+			showWords(labelID, maxLabelID);
+		} 
+	});
+
+}
+
+function binaryG2 (x1, x2, n1, n2) {
+	var p1 = x1 / n1;
+	var p2 = x2 / n2;
+	var p = (x1 + x2) / (n1 + n2);
+	
+	return -2 * ( x1 * Math.log(p / p1) + (n1 - x1) * Math.log((1 - p)/(1 - p1)) + 
+				  x2 * Math.log(p / p2) + (n2 - x2) * Math.log((1 - p)/(1 - p2)) );
+}
+
+function showWords(leftLabel, rightLabel) {
+	var relativeCounts = [];
+	words.forEach(function (word, wordID) {
+		if (wordLabelCounts[wordID].hasOwnProperty(leftLabel) &&
+			wordLabelCounts[wordID].hasOwnProperty(rightLabel)) {
+			var leftCount = wordLabelCounts[wordID][leftLabel];
+			var rightCount = wordLabelCounts[wordID][rightLabel];
+			if (leftCount > 5 && rightCount > 5) {
+				var g2 = binaryG2(leftCount, rightCount, labelSums[leftLabel], labelSums[rightLabel]);
+				if (g2 > 3.0) {	relativeCounts.push({wordID: wordID, leftCount: leftCount, rightCount: rightCount, logRatio: Math.log(rightCount / leftCount), g2: g2 }); }
+			}
+		}
+	});
+	
+	var colorScale = d3.scale.linear().domain([-5, -2, 0, 2, 5]).range(["#d7191c", "#fdae61", "#aaaa4a", "#abd9e9", "#2c7bb6"]);
+	
+	var wordDivs = d3.select("#words").selectAll("span").data(relativeCounts.sort(function (a, b) { return a.logRatio - b.logRatio; }));
+	wordDivs.enter().append("span");
+	wordDivs.exit().remove();
+	wordDivs.style("color", function(w) { return colorScale(w.logRatio); }).text(function (w) { return words[w.wordID] + " "; });
+}
+
+function getLabelID(label) {
+	if (! labelIDs.has(label)) {
+		var labelID = labels.length;
+		labels.push(label);
+		labelIDs.set(label, labelID);
+		labelSums[labelID] = 0;
+	}
+	
+	return labelIDs.get(label);
+}
+
+function getWordID(word) {
+	if (! wordIDs.has(word)) {
+		var wordID = words.length;
+		words.push(word);
+		wordIDs.set(word, wordID);
+		wordLabelCounts[wordID] = {};
+		wordLabelNonZeros[wordID] = [];
+	}
+	
+	return wordIDs.get(word);
+}
+
+function parseLine( fields, row ) {
+	// If it's not in [ID]\t[TAG]\t[TEXT] format...
+	if (fields.length != 3) { /* error! */ return; }
+
+	var docID = fields[0];
+	var labelID = getLabelID(fields[1]); // interpret as a number
+	text = fields[2].replace(/\\n/g, " ");
+
+	var tokens = [];
+	var rawTokens = text.toLowerCase().match(wordPattern);
+	if (rawTokens == null) { return; }
+
+	var wordID;
+
+	rawTokens.forEach(function (word) {
+		if (word !== "" && ! stopwords[word] && word.length > 2) {
+			wordID = getWordID(word);
+			var counts = wordLabelCounts[wordID];
+			if (! counts.hasOwnProperty(labelID)) {
+				counts[labelID] = 0;
+				wordLabelNonZeros[wordID].push(labelID);
+			}
+			counts[labelID] += 1;
+			labelSums[labelID] += 1;
+			tokens.push(wordID);
+		}
+	});
+
+	return { "originalOrder" : row, "id" : docID, "labelID" : labelID, "originalText" : text, "tokens" : tokens };
+};
+
+function leaveOneOut( doc ) {
+	
+	// First subtract the document from the label's histogram
+	doc.tokens.forEach(function (wordID) {
+		wordLabelCounts[wordID][doc.labelID] -= 1;
+	});
+	labelSums[doc.labelID] -= doc.tokens.length;
+
+	doc.labelWeights = Array(labels.length);
+	labels.forEach(function (label, labelID) {
+		doc.labelWeights[labelID] = doc.tokens.length * (logSmoothing - Math.log(labelSums[labelID] + words.length * smoothing));
+	});
+	
+	// Add up weights for each label
+	for (var position = 0; position < doc.tokens.length; position++) {
+		var wordID = doc.tokens[position];
+		var nonZeros = wordLabelNonZeros[wordID];
+		var counts = wordLabelCounts[wordID];
+		for (var i = 0; i < nonZeros.length; i++) {
+			var labelID = nonZeros[i];
+			doc.labelWeights[labelID] += 
+				Math.log(counts[labelID] + smoothing) - logSmoothing;
+		}
+	}
+	
+	var maxScore = Number.NEGATIVE_INFINITY;
+	doc.maxLabelID = -1;
+	
+	labels.forEach(function (label, labelID) {
+		doc.labelWeights[labelID] /= doc.tokens.length;
+		if (doc.labelWeights[labelID] > maxScore) {
+			maxScore = doc.labelWeights[labelID];
+			doc.maxLabelID = labelID;
+		}
+	});
+	
+	confusion[doc.labelID][doc.maxLabelID] += 1;
+	
+	// Add the document back in
+	doc.tokens.forEach(function (wordID) {
+		wordLabelCounts[wordID][doc.labelID] += 1;
+	});
+	labelSums[doc.labelID] += doc.tokens.length;
+}
+
+d3.text("input.txt", 
+function (error, text) {
+	console.log("got docs");
+	var start = +new Date();
+	documents = d3.tsv.parseRows(text, parseLine);
+	var end = +new Date();
+	console.log("parsed " + (end - start));
+		
+	confusion = Array(labels.length);
+	for (var row = 0; row < labels.length; row++) {
+		confusion[row] = Array(labels.length);
+		for (var col = 0; col < labels.length; col++) {
+			confusion[row][col] = 0;
+		}
+	}
+	
+	var maxCount = d3.max(d3.keys(wordLabelCounts), function (wordID) { return d3.max(d3.values(wordLabelCounts[wordID])); });
+	start = +new Date();
+	documents.forEach(function (doc) { leaveOneOut(doc); });
+	end = +new Date();
+	console.log("classified " + (end - start));
+	plotConfusion();
+});
+
+</script>
+</body>
+</html>
