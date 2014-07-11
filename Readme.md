@@ -5,7 +5,7 @@ The page then compares each document to each label _as if that document were not
 Some documents will be "correctly" classified, but others will match another class.
 
 We view the relationship between human-applied labels and computationally inferred labels with a grid.
-As an example, we include a collection of Danish folktales collected by Evald Tang Kristensen (1843-1929) and (translated by Tim Tangherlini)[http://www.amazon.com/Folktales-Legends-Stories-Directions-Scandinavian/dp/029599259X].
+As an example, we include a collection of Danish folktales collected by Evald Tang Kristensen (1843-1929) and [translated by Tim Tangherlini](http://www.amazon.com/Folktales-Legends-Stories-Directions-Scandinavian/dp/029599259X).
 Kristensen organized these stories into multiple volumes, which we use as labels.
 
 Each row of the grid represents the stories Kristensen assigned to a label, and each column represents the stories assigned by the classifier to a label.
